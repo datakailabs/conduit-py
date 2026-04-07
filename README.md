@@ -2,25 +2,69 @@
 
 Python SDK for [Conduit](https://github.com/datakailabs/conduit) — the knowledge graph engine.
 
+[![PyPI](https://img.shields.io/pypi/v/conduit-ai?color=blue)](https://pypi.org/project/conduit-ai/)
+[![License](https://img.shields.io/badge/license-Apache--2.0-green)](LICENSE)
+
 ## Install
 
 ```bash
-pip install conduit-ai                    # Core client
-pip install 'conduit-ai[langchain]'       # With LangChain retriever
+pip install conduit-ai                    # API client only
+pip install 'conduit-ai[langchain]'       # + LangChain retriever
+pip install 'conduit-ai[local]'           # + embedded engine (DuckDB, no server needed)
+pip install 'conduit-ai[all]'             # Everything
 ```
 
-## Quick Start
+## Embedded Mode (no server required)
 
-### Ask a question
+Run a knowledge graph locally — no Docker, no Postgres, no ArangoDB. Just DuckDB under the hood.
+
+```python
+from conduit_ai import LocalConduit
+
+conduit = LocalConduit("./my-knowledge-base")
+conduit.install_pack("snowflake-2026.04.ckp")
+
+# Graph-augmented search
+results = conduit.search("How does Cortex Search work?", limit=5)
+for r in results:
+    print(f"{r['score']:.3f} [{r['path']}] {r['title']}")
+
+# Formatted context for LLM prompts
+context = conduit.context("Delta Live Tables patterns")
+```
+
+Topic-scoped installation — only load what you need:
+
+```python
+conduit.install_pack("aws-2026.04.ckp", topics=["s3", "iam"])
+```
+
+### LangChain Retriever (embedded)
+
+```python
+retriever = conduit.as_retriever(limit=8)
+docs = retriever.invoke("How do dynamic tables work?")
+
+# Use in any chain
+chain = {"context": retriever, "question": RunnablePassthrough()} | prompt | llm
+```
+
+## API Client (connect to a Conduit server)
 
 ```python
 from conduit_ai import ConduitClient
 
 client = ConduitClient(api_key="ck_...", endpoint="http://localhost:4000")
 
+# Ask a question (GraphRAG + LLM synthesis)
 answer = client.ask("How does Snowflake Cortex Search work?")
 print(answer.answer)
 print(f"Sources: {len(answer.sources)}")
+
+# Retrieve context without LLM
+ctx = client.context("data pipeline best practices", limit=5)
+for result in ctx.results:
+    print(f"{result.title} ({result.score:.2f})")
 ```
 
 ### Conversational follow-ups
@@ -29,38 +73,22 @@ print(f"Sources: {len(answer.sources)}")
 import uuid
 
 thread_id = str(uuid.uuid4())
-
 answer1 = client.ask("What is Delta Live Tables?", thread_id=thread_id)
 answer2 = client.ask("Can I use it with Cortex?", thread_id=thread_id)
 # ^ automatically rewritten to: "Can I use Delta Live Tables with Snowflake Cortex?"
 ```
 
-### Retrieve context (no LLM)
-
-```python
-ctx = client.context("data pipeline best practices", limit=5)
-for result in ctx.results:
-    print(f"{result.title} ({result.score:.2f})")
-    print(f"  Domains: {result.domains}")
-```
-
-### Stream tokens
+### Streaming
 
 ```python
 async for token in client.aask_stream("Compare Databricks and Snowflake for ML"):
     print(token, end="", flush=True)
 ```
 
-## LangChain Retriever
-
-Drop Conduit into any LangChain/LangGraph chain:
+### LangChain Retriever (server-backed)
 
 ```python
 from conduit_ai.retriever import ConduitRetriever
-from langchain_openai import ChatOpenAI
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.runnables import RunnablePassthrough
-from langchain_core.output_parsers import StrOutputParser
 
 retriever = ConduitRetriever(
     api_key="ck_...",
@@ -69,52 +97,54 @@ retriever = ConduitRetriever(
     limit=8,
 )
 
-prompt = ChatPromptTemplate.from_template(
-    "Answer based on context:\n{context}\n\nQuestion: {question}"
-)
-
-chain = (
-    {"context": retriever, "question": RunnablePassthrough()}
-    | prompt
-    | ChatOpenAI(model="gpt-4o")
-    | StrOutputParser()
-)
-
-result = chain.invoke("How do I set up change data capture?")
+docs = retriever.invoke("How do I set up change data capture?")
 ```
 
-### Retriever Options
+## CLI
 
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `api_key` | None | Conduit API key |
-| `endpoint` | `https://api.conduit.datakai.com` | Conduit server URL |
-| `kai_id` | None | Scope retrieval to a specific Kai |
-| `limit` | 8 | Max results to retrieve |
-| `include_content` | True | Include full zettel content in documents |
-| `include_graph_context` | False | Use /context endpoint (includes graph neighbors) instead of /ask |
+Installed automatically with `pip install conduit-ai`:
 
-## Scoped Knowledge (Kais)
+```bash
+# Inspect a knowledge pack
+conduit inspect snowflake-2026.04.ckp
 
-Kais are knowledge views — filtered subsets of the graph scoped by domain, topic, or knowledge type.
+# Install a pack (full or topic-scoped)
+conduit install snowflake-2026.04.ckp
+conduit install aws-2026.04.ckp --topics s3,iam,redshift
 
-```python
-# Query only Snowflake knowledge
-client = ConduitClient(api_key="ck_...", kai_id="kai_snowflake")
-answer = client.ask("How do dynamic tables work?")
+# Dry run (preview without installing)
+conduit install aws-2026.04.ckp --topics s3 --dry-run
 
-# Or per-retriever
-retriever = ConduitRetriever(api_key="ck_...", kai_id="kai_aws")
+# Ask a question
+conduit ask "How does Cortex Search work?" --api-key ck_...
+
+# List installed knowledge domains
+conduit list
 ```
 
-## Async Support
+## Knowledge Packs
 
-Every method has an async counterpart:
+Knowledge packs (`.ckp` files) are portable, versioned units of domain knowledge. Download seed packs from [datakailabs/knowledge-packs](https://github.com/datakailabs/knowledge-packs):
 
-```python
-answer = await client.aask("question")
-ctx = await client.acontext("query")
+| Pack | Zettels | Description |
+|------|---------|-------------|
+| `snowflake-2026.04.ckp` | 5,634 | Snowflake platform documentation |
+| `aws-2026.04.ckp` | 3,466 | AWS services documentation |
+| `databricks-2026.04.ckp` | 4,173 | Databricks platform documentation |
+| `genai-2026.04.ckp` | 1,671 | Generative AI patterns and techniques |
 
-async with ConduitClient(api_key="ck_...") as client:
-    answer = await client.aask("question")
-```
+## Two Modes
+
+| | Embedded (`LocalConduit`) | Server (`ConduitClient`) |
+|---|---|---|
+| **Requires** | `pip install 'conduit-ai[local]'` | Running Conduit server |
+| **Storage** | DuckDB (single file) | PostgreSQL + ArangoDB |
+| **Graph** | In-memory adjacency list | ArangoDB (full AQL) |
+| **LLM synthesis** | Bring your own | Built-in |
+| **Multi-user** | No | Yes |
+| **Scale** | ~50K zettels | ~500K+ |
+| **Best for** | Notebooks, prototyping, CLI | Production, teams, chatbots |
+
+## License
+
+Apache-2.0
