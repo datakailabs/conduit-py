@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  install-test:
+    name: New User Experience
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install from PyPI
+        run: pip install 'conduit-ai[local]'
+
+      - name: CLI works
+        run: conduit --help
+
+      - name: Core imports work
+        run: |
+          python -c "
+          from conduit_ai import ConduitClient, LocalConduit
+          from conduit_ai.models import AskResponse, ContextResponse
+
+          # API client instantiates
+          client = ConduitClient(api_key='test', endpoint='http://localhost:4000')
+          print('ConduitClient: OK')
+
+          # Embedded engine creates a DB
+          conduit = LocalConduit('/tmp/test.duckdb')
+          stats = conduit.stats()
+          assert stats['zettels'] == 0
+          print(f'LocalConduit: OK ({stats})')
+          conduit.close()
+
+          print('All imports and instantiations passed.')
+          "
+
+      - name: LangChain retriever works
+        run: |
+          pip install 'conduit-ai[langchain]'
+          python -c "
+          from conduit_ai.retriever import ConduitRetriever
+          from langchain_core.retrievers import BaseRetriever
+          assert issubclass(ConduitRetriever, BaseRetriever)
+          print('LangChain retriever: OK (BaseRetriever subclass)')
+          "
+
+  source-test:
+    name: Source Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install from source
+        run: pip install -e '.[all]'
+      - name: Verify version
+        run: python -c "import conduit_ai; print(f'Version: {conduit_ai.__version__}')"
