@@ -65,4 +65,4 @@ jobs:
       - name: Install from source
         run: pip install -e '.[all]'
       - name: Verify version
-        run: python -c "import conduit_ai; print(f'Version: {conduit_ai.__version__}')"
+        run: python -c "import conduit_ai; print('Version:', conduit_ai.__version__)"
